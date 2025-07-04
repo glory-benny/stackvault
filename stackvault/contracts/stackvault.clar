@@ -76,3 +76,93 @@
     token-address: principal, ;; SIP-010 compliant token contract
   }
 )
+
+;; User-to-portfolio relationship mapping for multi-portfolio management
+(define-map UserPortfolios
+  principal
+  (list 20 uint) ;; Maximum 20 portfolios per user
+)
+
+;; READ-ONLY INTERFACE - Query Functions & Data Retrieval
+
+;; Retrieve complete portfolio metadata and configuration
+(define-read-only (get-portfolio (portfolio-id uint))
+  (map-get? Portfolios portfolio-id)
+)
+
+;; Get specific asset allocation details within a portfolio
+(define-read-only (get-portfolio-asset
+    (portfolio-id uint)
+    (token-id uint)
+  )
+  (map-get? PortfolioAssets {
+    portfolio-id: portfolio-id,
+    token-id: token-id,
+  })
+)
+
+;; Retrieve all portfolios owned by a specific user
+(define-read-only (get-user-portfolios (user principal))
+  (default-to (list) (map-get? UserPortfolios user))
+)
+
+;; Calculate rebalancing requirements and generate recommendations
+(define-read-only (calculate-rebalance-amounts (portfolio-id uint))
+  (let (
+      (portfolio (unwrap! (get-portfolio portfolio-id) ERR-INVALID-PORTFOLIO))
+      (total-value (get total-value portfolio))
+    )
+    (ok {
+      portfolio-id: portfolio-id,
+      total-value: total-value,
+      needs-rebalance: (> (- stacks-block-height (get last-rebalanced portfolio)) u144), ;; 24 hour rebalancing interval
+    })
+  )
+)
+
+;; CORE FUNCTIONALITY - Portfolio Creation & Management Engine
+
+;; Create new diversified portfolio with initial token allocation strategy
+(define-public (create-portfolio
+    (initial-tokens (list 10 principal))
+    (percentages (list 10 uint))
+  )
+  (let (
+      (portfolio-id (+ (var-get portfolio-counter) u1))
+      (token-count (len initial-tokens))
+      (percentage-count (len percentages))
+      (token-0 (element-at? initial-tokens u0))
+      (token-1 (element-at? initial-tokens u1))
+      (percentage-0 (element-at? percentages u0))
+      (percentage-1 (element-at? percentages u1))
+    )
+    ;; Comprehensive validation layer for portfolio creation
+    (asserts! (<= token-count MAX-TOKENS-PER-PORTFOLIO) ERR-MAX-TOKENS-EXCEEDED)
+    (asserts! (is-eq token-count percentage-count) ERR-LENGTH-MISMATCH)
+    (asserts! (validate-portfolio-percentages percentages) ERR-INVALID-PERCENTAGE)
+    ;; Initialize portfolio metadata with creation parameters
+    (map-set Portfolios portfolio-id {
+      owner: tx-sender,
+      created-at: stacks-block-height,
+      last-rebalanced: stacks-block-height,
+      total-value: u0,
+      active: true,
+      token-count: token-count,
+    })
+    ;; Initialize minimum viable portfolio with first two assets
+    (asserts! (and (is-some token-0) (is-some token-1)) ERR-INVALID-TOKEN)
+    (asserts! (and (is-some percentage-0) (is-some percentage-1))
+      ERR-INVALID-PERCENTAGE
+    )
+    (try! (initialize-portfolio-asset u0 (unwrap-panic token-0)
+      (unwrap-panic percentage-0) portfolio-id
+    ))
+    (try! (initialize-portfolio-asset u1 (unwrap-panic token-1)
+      (unwrap-panic percentage-1) portfolio-id
+    ))
+    ;; Update user portfolio registry and increment global counter
+    (try! (add-to-user-portfolios tx-sender portfolio-id))
+    (var-set portfolio-counter portfolio-id)
+    (ok portfolio-id)
+  )
+)
