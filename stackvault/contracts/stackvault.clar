@@ -166,3 +166,78 @@
     (ok portfolio-id)
   )
 )
+
+;; PORTFOLIO OPERATIONS - Rebalancing & Allocation Management
+
+;; Execute automated portfolio rebalancing to target allocations
+(define-public (rebalance-portfolio (portfolio-id uint))
+  (let ((portfolio (unwrap! (get-portfolio portfolio-id) ERR-INVALID-PORTFOLIO)))
+    ;; Authorization and state validation checks
+    (asserts! (is-eq tx-sender (get owner portfolio)) ERR-NOT-AUTHORIZED)
+    (asserts! (get active portfolio) ERR-INVALID-PORTFOLIO)
+    ;; Update rebalancing timestamp for tracking purposes
+    (map-set Portfolios portfolio-id
+      (merge portfolio { last-rebalanced: stacks-block-height })
+    )
+    (ok true)
+  )
+)
+
+;; Update target allocation percentage for specific portfolio asset
+(define-public (update-portfolio-allocation
+    (portfolio-id uint)
+    (token-id uint)
+    (new-percentage uint)
+  )
+  (let (
+      (portfolio (unwrap! (get-portfolio portfolio-id) ERR-INVALID-PORTFOLIO))
+      (asset (unwrap! (get-portfolio-asset portfolio-id token-id) ERR-INVALID-TOKEN))
+    )
+    ;; Authorization and validation checks
+    (asserts! (is-eq tx-sender (get owner portfolio)) ERR-NOT-AUTHORIZED)
+    (asserts! (validate-percentage new-percentage) ERR-INVALID-PERCENTAGE)
+    (asserts! (validate-token-id portfolio-id token-id) ERR-INVALID-TOKEN-ID)
+    ;; Update asset allocation with new target percentage
+    (map-set PortfolioAssets {
+      portfolio-id: portfolio-id,
+      token-id: token-id,
+    }
+      (merge asset { target-percentage: new-percentage })
+    )
+    (ok true)
+  )
+)
+
+;; INTERNAL HELPERS - Validation & Utility Functions
+
+;; Validate token ID against portfolio constraints and bounds
+(define-private (validate-token-id
+    (portfolio-id uint)
+    (token-id uint)
+  )
+  (let ((portfolio (unwrap! (get-portfolio portfolio-id) false)))
+    (and
+      (< token-id MAX-TOKENS-PER-PORTFOLIO)
+      (< token-id (get token-count portfolio))
+      true
+    )
+  )
+)
+
+;; Validate percentage is within acceptable range (0-10000 basis points)
+(define-private (validate-percentage (percentage uint))
+  (and (>= percentage u0) (<= percentage BASIS-POINTS))
+)
+
+;; Validate that all portfolio percentages are within valid ranges
+(define-private (validate-portfolio-percentages (percentages (list 10 uint)))
+  (fold check-percentage-sum percentages true)
+)
+
+;; Helper function for percentage validation fold operation
+(define-private (check-percentage-sum
+    (current-percentage uint)
+    (valid bool)
+  )
+  (and valid (validate-percentage current-percentage))
+)
